@@ -12,7 +12,7 @@ import PIL.ImageOps
 import clip
 import numpy as np
 import torch
-from flask import Flask, send_file, url_for
+from flask import Flask, send_file, url_for, jsonify
 from flask import render_template, request, redirect
 from torchvision.transforms.functional import resize
 from werkzeug.utils import secure_filename
@@ -44,6 +44,83 @@ def favicon():
     return url_for('static', filename='/favicon.ico')
 
 
+@app.route('/search-images', methods=['POST'])
+def search_images():
+    if request.method == 'POST':
+        # check if the post request has the file part
+        if 'file' not in request.files:
+            return jsonify({
+                'ok': False,
+                'message': 'File is required'
+            })
+        if 'dataset' not in request.form:
+            return jsonify({
+                'ok': False,
+                'message': 'Dataset is required'
+            })
+        if 'caption' not in request.form:
+            return jsonify({
+                'ok': False,
+                'message': 'Caption is required'
+            })
+        dataset = request.form['dataset']
+        caption = request.form['caption']
+        file = request.files['file']
+        if file:
+            try:
+                img = PIL.Image.open(file)
+            except Exception:  # If the file is not an image redirect to the reference choice page
+                return redirect(url_for('reference', dataset=dataset))
+            resized_img = resize(img, 512, PIL.Image.BICUBIC)
+
+            filename = secure_filename(file.filename)
+            filename = os.path.splitext(filename)[0] + str(int(time.time())) + os.path.splitext(filename)[
+                1]  # Append the timestamp to avoid conflicts in names
+            if 'fiq-category' in request.form:  # if the user upload an image to FashionIQ it must specify the category
+                assert dataset == 'fashionIQ'
+                fiq_category = request.form['fiq-category']
+                folder_path = app.config['UPLOAD_FOLDER'] / dataset / fiq_category
+                folder_path.mkdir(exist_ok=True, parents=True)
+                resized_img.save(folder_path / filename)
+            else:
+                assert dataset == 'cirr'
+                folder_path = app.config['UPLOAD_FOLDER'] / dataset
+                folder_path.mkdir(exist_ok=True, parents=True)
+                resized_img.save(folder_path / filename)
+
+            reference_name = filename
+            n_retrieved = 50  # retrieve first 50 results since for both dataset the R@50 is the broader scale metric
+
+            if dataset == 'cirr':
+                combiner = cirr_combiner
+            elif dataset == 'fashionIQ':
+                combiner = fashionIQ_combiner
+            else:
+                raise ValueError()
+            sorted_group_names = ""
+
+            if dataset == 'cirr':
+                # Compute CIRR results
+                sorted_group_names, sorted_index_names, target_name = compute_cirr_results(caption, combiner,
+                                                                                           n_retrieved,
+                                                                                           reference_name)
+            elif dataset == "fashionIQ":
+                # Compute fashionIQ results
+                sorted_index_names, target_name = compute_fashionIQ_results(caption, combiner, n_retrieved,
+                                                                            reference_name)
+
+            else:
+                return jsonify({
+                    'ok': False,
+                    'message': 'Please choice dataset'
+                })
+
+            return jsonify({
+                'ok': True,
+                'names': np.array(sorted_index_names[:n_retrieved]).tolist()
+            })
+
+
 @app.route('/file_upload/<string:dataset>', methods=['POST'])
 def file_upload(dataset: str):
     """
@@ -62,6 +139,7 @@ def file_upload(dataset: str):
                 return redirect(url_for('reference', dataset=dataset))
             resized_img = resize(img, 512, PIL.Image.BICUBIC)
 
+            relative_captions = []
             filename = secure_filename(file.filename)
             filename = os.path.splitext(filename)[0] + str(int(time.time())) + os.path.splitext(filename)[
                 1]  # Append the timestamp to avoid conflicts in names
@@ -524,4 +602,4 @@ def delete_uploaded_images():
 
 
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=8008)
+    app.run(host="0.0.0.0", port=8008, debug=True)
