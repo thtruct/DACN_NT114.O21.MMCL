@@ -328,8 +328,9 @@ def get_image(image_name: str, dim: Optional[int] = None, gt: Optional[str] = No
     # Check whether the image comes from CIRR or FashionIQ dataset
     if image_name in cirr_name_to_relpath:  #
         image_path = server_base_path / 'cirr_dataset' / f'{cirr_name_to_relpath[image_name]}'
+
     elif image_name in fashion_index_names:
-        image_path = server_base_path / 'fashionIQ_dataset' / 'images' / f"{image_name}.jpg"
+        image_path = server_base_path / 'fashionIQ_dataset' / 'images' / f"{image_name}.png"
     else:  # Search for an uploaded image
         for iter_path in app.config['UPLOAD_FOLDER'].rglob('*'):
             if iter_path.name == image_name:
@@ -354,9 +355,9 @@ def get_image(image_name: str, dim: Optional[int] = None, gt: Optional[str] = No
         pil_image = PIL.ImageOps.expand(pil_image, border=1, fill='grey')
 
     img_io = BytesIO()
-    pil_image.save(img_io, 'JPEG', quality=80)
+    pil_image.save(img_io, 'PNG', quality=80)
     img_io.seek(0)
-    return send_file(img_io, mimetype='image/jpeg')
+    return send_file(img_io, mimetype='image/png')
 
 
 @app.before_first_request
@@ -523,4 +524,4 @@ def delete_uploaded_images():
 
 
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=8008)
