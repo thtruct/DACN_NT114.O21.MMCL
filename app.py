@@ -16,11 +16,13 @@ from flask import Flask, send_file, url_for, jsonify
 from flask import render_template, request, redirect
 from torchvision.transforms.functional import resize
 from werkzeug.utils import secure_filename
+from flask_cors import CORS, cross_origin
 
 from data_utils import targetpad_resize, targetpad_transform, server_base_path, data_path
 from model import Combiner
 
 app = Flask(__name__)
+CORS(app)
 app.config['UPLOAD_FOLDER'] = server_base_path / 'uploaded_files'
 
 if torch.cuda.is_available():
@@ -45,6 +47,7 @@ def favicon():
 
 
 @app.route('/search-images', methods=['POST'])
+@cross_origin()
 def search_images():
     if request.method == 'POST':
         # check if the post request has the file part
@@ -70,7 +73,10 @@ def search_images():
             try:
                 img = PIL.Image.open(file)
             except Exception:  # If the file is not an image redirect to the reference choice page
-                return redirect(url_for('reference', dataset=dataset))
+                return jsonify({
+                    'ok': False,
+                    'message': 'Please choice dataset'
+                })
             resized_img = resize(img, 512, PIL.Image.BICUBIC)
 
             filename = secure_filename(file.filename)
@@ -117,8 +123,101 @@ def search_images():
 
             return jsonify({
                 'ok': True,
-                'names': np.array(sorted_index_names[:n_retrieved]).tolist()
+                'names': np.array(sorted_index_names[:n_retrieved]).tolist(),
+                'group_names': np.array(sorted_group_names).tolist()
             })
+
+
+@app.route('/images/<string:dataset>')
+@cross_origin()
+def images_reference(dataset: str):
+    """
+    Get 30 random reference images and makes the render of the 'reference' template
+    :param dataset: dataset where get the reference images
+    """
+    if dataset == 'cirr':
+        random_indexes = random.sample(range(len(cirr_val_triplets)), k=30)
+        triplets = np.array(cirr_val_triplets)[random_indexes]
+        names = [triplet['reference'] for triplet in triplets]
+    elif dataset == 'fashionIQ':
+        random_indexes = random.sample(range(len(fashionIQ_val_triplets)), k=30)
+        triplets = np.array(fashionIQ_val_triplets)[random_indexes]
+        names = [triplet['candidate'] for triplet in triplets]
+    else:
+        return jsonify({
+            'ok': True,
+            'names': [],
+        })
+
+    return jsonify({
+        'ok': True,
+        'names': np.array(names).tolist(),
+    })
+
+
+@app.route('/images/<string:dataset>/<string:reference_name>')
+@cross_origin()
+def images_relative_caption(dataset: str, reference_name: str):
+    """
+    Get the dataset relative captions for the given reference image and renders the 'relative_caption' template
+    :param dataset: dataset of the reference image
+    :param reference_name: name of the reference images
+    """
+    relative_captions = []
+    if dataset == 'cirr':
+        for triplet in cirr_val_triplets:
+            if triplet['reference'] == reference_name:
+                relative_captions.append(f"{triplet['caption']}")
+    elif dataset == 'fashionIQ':
+        for triplet in fashionIQ_val_triplets:
+            if triplet['candidate'] == reference_name:
+                relative_captions.append(
+                    f"{triplet['captions'][0].strip('?,. ').capitalize()} and {triplet['captions'][1].strip('?,. ')}")
+
+    return jsonify({
+        'ok': True,
+        'names': np.array(relative_captions).tolist(),
+    })
+
+
+@app.route('/images/<string:dataset>/<string:reference_name>/<string:caption>')
+@cross_origin()
+def images_results(dataset: str, reference_name: str, caption: str):
+    """
+    Compute the results of a given query and makes the render of 'results.html' template
+    :param dataset: dataset of the query
+    :param reference_name: reference image name
+    :param caption: relative caption
+    """
+    n_retrieved = 50  # retrieve first 50 results since for both dataset the R@50 is the broader scale metric
+
+    if dataset == 'cirr':
+        combiner = cirr_combiner
+    elif dataset == 'fashionIQ':
+        combiner = fashionIQ_combiner
+    else:
+        raise ValueError()
+    sorted_group_names = ""
+
+    if dataset == 'cirr':
+        # Compute CIRR results
+        sorted_group_names, sorted_index_names, target_name = compute_cirr_results(caption, combiner, n_retrieved,
+                                                                                   reference_name)
+    elif dataset == "fashionIQ":
+        # Compute fashionIQ results
+        sorted_index_names, target_name = compute_fashionIQ_results(caption, combiner, n_retrieved, reference_name)
+
+    else:
+        return jsonify({
+            'ok': False,
+            'names': [],
+        })
+
+    return jsonify({
+        'ok': True,
+        'names': np.array(sorted_index_names[:n_retrieved]).tolist(),
+        'group_names': np.array(sorted_group_names).tolist()
+    })
 
 
 @app.route('/file_upload/<string:dataset>', methods=['POST'])
